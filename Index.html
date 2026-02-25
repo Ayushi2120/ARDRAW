@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebAR Gesture Studio Pro</title>
+    <!-- MediaPipe & Plugins -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --secondary: #ec4899;
+            --accent: #fbbf24;
+            --bg: #0f172a;
+            --success: #10b981;
+        }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background: var(--bg);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            color: white;
+        }
+
+        #container { position: relative; width: 100vw; height: 100vh; overflow: hidden; display: none; }
+        #input_video { display: none; width: 1px; height: 1px; }
+        #output_canvas { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+
+        #ui-layer {
+            position: absolute; inset: 0; pointer-events: none;
+            display: flex; flex-direction: column; justify-content: space-between;
+            padding: 25px; box-sizing: border-box; z-index: 100;
+        }
+
+        .top-ui { display: flex; flex-direction: column; align-items: center; gap: 15px; }
+        .mode-selector { display: flex; gap: 15px; pointer-events: auto; }
+
+        .ar-btn {
+            position: relative; width: 70px; height: 70px;
+            background: rgba(15, 23, 42, 0.8); border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50%; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; font-size: 9px;
+            transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); backdrop-filter: blur(8px);
+        }
+
+        .ar-btn.active { border-color: var(--primary); box-shadow: 0 0 20px var(--primary); background: rgba(99, 102, 241, 0.3); }
+        .ar-btn .icon { font-size: 22px; margin-bottom: 2px; }
+
+        .sub-menu {
+            display: flex; gap: 10px; background: rgba(255,255,255,0.1);
+            padding: 8px 15px; border-radius: 30px; backdrop-filter: blur(10px);
+            pointer-events: auto; opacity: 0; transform: translateY(-10px);
+            transition: 0.3s; border: 1px solid rgba(255,255,255,0.1);
+            visibility: hidden;
+        }
+        .sub-menu.show { opacity: 1; transform: translateY(0); visibility: visible; }
+
+        .sub-btn {
+            width: 40px; height: 40px; border-radius: 50%; border: 2px solid transparent;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(0,0,0,0.3); font-size: 18px; transition: 0.2s;
+        }
+        .sub-btn.active { border-color: var(--accent); background: var(--accent); color: black; }
+
+        .gesture-hint {
+            position: absolute; left: 25px; top: 50%; transform: translateY(-50%);
+            display: flex; flex-direction: column; gap: 15px;
+        }
+        .hint-item {
+            background: rgba(0,0,0,0.6); padding: 10px 15px; border-radius: 12px;
+            display: flex; align-items: center; gap: 10px; font-size: 11px;
+            border-left: 4px solid var(--primary); backdrop-filter: blur(5px);
+        }
+
+        #hurray-text {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%) scale(0.5);
+            font-size: 4rem; font-weight: 900; opacity: 0; pointer-events: none; transition: 0.4s;
+            text-shadow: 0 0 30px var(--secondary); z-index: 200;
+        }
+        #hurray-text.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+        .progress-ring { position: absolute; inset: 0; transform: rotate(-90deg); pointer-events: none; }
+        .progress-ring circle {
+            fill: transparent; stroke: var(--accent); stroke-width: 4;
+            stroke-dasharray: 219.9; stroke-dashoffset: 219.9;
+        }
+
+        #loader {
+            position: fixed; inset: 0; background: var(--bg);
+            display: flex; flex-direction: column; justify-content: center;
+            align-items: center; z-index: 1000; padding: 20px; text-align: center;
+        }
+        .spinner {
+            width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.1);
+            border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite;
+            margin-bottom: 24px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .start-btn {
+            background: var(--primary); color: white; border: none; padding: 16px 36px;
+            border-radius: 12px; font-weight: bold; cursor: pointer; display: none;
+            margin-top: 20px; font-size: 1.2rem; transition: transform 0.2s;
+        }
+        .start-btn:active { transform: scale(0.95); }
+
+        #capture-btn { background:white; border:none; width:65px; height:65px; border-radius:50%; font-size:30px; cursor:pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+    </style>
+</head>
+<body>
+
+<div id="loader">
+    <div id="spinner" class="spinner"></div>
+    <div id="status-msg">AR Studio is initializing...</div>
+    <button id="start-camera-btn" class="start-btn">ALLOW CAMERA ACCESS</button>
+</div>
+
+<div id="container">
+    <video id="input_video" playsinline muted></video>
+    <canvas id="output_canvas"></canvas>
+
+    <div id="ui-layer">
+        <div class="top-ui">
+            <div class="mode-selector">
+                <div id="btn-free" class="ar-btn active" data-mode="FreeStyle">
+                    <svg class="progress-ring" viewBox="0 0 80 80"><circle r="35" cx="40" cy="40"></circle></svg>
+                    <span class="icon">✏️</span><span>DRAW</span>
+                </div>
+                <div id="btn-shape" class="ar-btn" data-mode="Shape">
+                    <svg class="progress-ring" viewBox="0 0 80 80"><circle r="35" cx="40" cy="40"></circle></svg>
+                    <span class="icon">📐</span><span>SHAPE</span>
+                </div>
+                <div id="btn-sparkle" class="ar-btn" data-mode="Sparkle">
+                    <svg class="progress-ring" viewBox="0 0 80 80"><circle r="35" cx="40" cy="40"></circle></svg>
+                    <span class="icon">✨</span><span>MAGIC</span>
+                </div>
+            </div>
+
+            <div id="menu-free" class="sub-menu show">
+                <div class="sub-btn active" data-val="#6366f1" style="background:#6366f1"></div>
+                <div class="sub-btn" data-val="#ec4899" style="background:#ec4899"></div>
+                <div class="sub-btn" data-val="#fbbf24" style="background:#fbbf24"></div>
+                <div class="sub-btn" data-val="eraser">🧽</div>
+            </div>
+            <div id="menu-shape" class="sub-menu">
+                <div class="sub-btn active" data-val="circle">⭕</div>
+                <div class="sub-btn" data-val="square">⬜</div>
+                <div class="sub-btn" data-val="star">⭐</div>
+            </div>
+            <div id="menu-sparkle" class="sub-menu">
+                <div class="sub-btn active" data-val="gold">🟡</div>
+                <div class="sub-btn" data-val="rainbow">🌈</div>
+                <div class="sub-btn" data-val="fire">🔥</div>
+            </div>
+        </div>
+
+        <div class="gesture-hint">
+            <div class="hint-item"><span>🤌</span> Pinch to Draw / Stamp</div>
+            <div class="hint-item"><span>🖐️</span> Open Palm to Clear All</div>
+            <div class="hint-item"><span>↕️</span> Vertical Gap = Shape Size</div>
+            <div class="hint-item"><span>👄</span> Open Mouth for Surprise</div>
+        </div>
+
+        <div id="hurray-text">HURRAY!! 🎉</div>
+
+        <div style="display:flex; justify-content:center; pointer-events:auto; padding-bottom: 20px;">
+            <button id="capture-btn">📸</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const loader = document.getElementById('loader');
+    const statusMsg = document.getElementById('status-msg');
+    const startBtn = document.getElementById('start-camera-btn');
+    const spinner = document.getElementById('spinner');
+    const hurrayText = document.getElementById('hurray-text');
+    const container = document.getElementById('container');
+
+    let currentMode = 'FreeStyle';
+    let currentSub = { FreeStyle: '#6366f1', Shape: 'circle', Sparkle: 'gold' };
+    let drawings = [];
+    let particles = [];
+    let isMouthOpen = false;
+    let pinchActive = false;
+    let clearTimer = 0;
+    
+    let hoverTarget = null;
+    let hoverStartTime = 0;
+    const HOVER_TIME = 700; 
+
+    let latestFace = null;
+    let latestHand = null;
+
+    // MediaPipe Setup
+    const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+    hands.onResults(r => latestHand = r.multiHandLandmarks?.[0]);
+
+    const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.7 });
+    faceMesh.onResults(r => latestFace = r.multiFaceLandmarks?.[0]);
+
+    function setMode(mode) {
+        currentMode = mode;
+        document.querySelectorAll('.ar-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+        document.querySelectorAll('.sub-menu').forEach(m => m.classList.toggle('show', m.id === `menu-${mode.toLowerCase().replace('style', '')}`));
+    }
+
+    function setSub(mode, val, el) {
+        currentSub[mode] = val;
+        el.parentElement.querySelectorAll('.sub-btn').forEach(b => b.classList.toggle('active', b === el));
+    }
+
+    async function initCamera() {
+        statusMsg.innerText = "Requesting permission...";
+        spinner.style.display = 'block';
+        startBtn.style.display = 'none';
+
+        try {
+            // First attempt to get the stream directly
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { width: 1280, height: 720, facingMode: "user" } 
+            });
+            
+            videoElement.srcObject = stream;
+            await videoElement.play();
+
+            // Setup MediaPipe camera utility once the stream is ready
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await faceMesh.send({image: videoElement});
+                    await hands.send({image: videoElement});
+                },
+                width: 1280, height: 720
+            });
+            
+            camera.start();
+            loader.style.display = 'none';
+            container.style.display = 'block';
+            loop();
+        } catch (err) {
+            console.error("Camera access failed:", err);
+            statusMsg.innerText = "Camera access denied. Please allow camera and try again.";
+            spinner.style.display = 'none';
+            startBtn.style.display = 'block';
+        }
+    }
+
+    function loop() {
+        if (canvasElement.width !== window.innerWidth) {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+        }
+
+        canvasCtx.save();
+        canvasCtx.translate(canvasElement.width, 0);
+        canvasCtx.scale(-1, 1);
+        canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.restore();
+
+        if (latestFace) {
+            const topLip = latestFace[13];
+            const bottomLip = latestFace[14];
+            const gap = Math.abs(topLip.y - bottomLip.y);
+            if (gap > 0.06 && !isMouthOpen) {
+                isMouthOpen = true;
+                hurrayText.classList.add('show');
+                confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+                setTimeout(() => hurrayText.classList.remove('show'), 1500);
+            } else if (gap < 0.02) isMouthOpen = false;
+        }
+
+        if (latestHand) {
+            const index = latestHand[8];
+            const thumb = latestHand[4];
+            const x = (1 - index.x) * canvasElement.width;
+            const y = index.y * canvasElement.height;
+            
+            const dx = index.x - thumb.x;
+            const dy = index.y - thumb.y;
+            const pinchDist = Math.sqrt(dx*dx + dy*dy);
+            const isPinching = pinchDist < 0.05;
+            const scale = Math.abs(index.y - thumb.y) * 1200;
+
+            const isHandOpen = [8, 12, 16, 20].every(i => latestHand[i].y < latestHand[i-2].y);
+            if (isHandOpen && !isPinching) {
+                clearTimer += 16;
+                drawClearCircle(x, y, clearTimer / 800);
+                if (clearTimer > 800) { drawings = []; particles = []; clearTimer = 0; }
+            } else clearTimer = 0;
+
+            handleUIInteraction(x, y);
+            drawCursor(x, y, isPinching);
+
+            if (currentMode === 'FreeStyle' && isPinching) {
+                const color = currentSub.FreeStyle;
+                if (!pinchActive) {
+                    drawings.push({ 
+                        type: 'line', 
+                        points: [{x, y}], 
+                        color, 
+                        composite: color === 'eraser' ? 'destination-out' : 'source-over' 
+                    });
+                    pinchActive = true;
+                } else {
+                    drawings[drawings.length-1].points.push({x, y});
+                }
+            } else if (currentMode === 'Shape') {
+                drawShapePreview(x, y, scale);
+                if (isPinching && !pinchActive) {
+                    drawings.push({ type: 'shape', x, y, size: scale, kind: currentSub.Shape });
+                    pinchActive = true;
+                }
+            } else if (currentMode === 'Sparkle' && isPinching) {
+                for (let i = 0; i < 3; i++) particles.push(new Particle(x, y, currentSub.Sparkle));
+            }
+
+            if (!isPinching) pinchActive = false;
+        } else {
+            resetHover();
+        }
+
+        renderCanvas();
+        requestAnimationFrame(loop);
+    }
+
+    function handleUIInteraction(x, y) {
+        const targets = [...document.querySelectorAll('.ar-btn'), ...document.querySelectorAll('.sub-btn')];
+        let found = null;
+        
+        targets.forEach(el => {
+            const r = el.getBoundingClientRect();
+            if (x > r.left - 20 && x < r.right + 20 && y > r.top - 20 && y < r.bottom + 20) found = el;
+        });
+
+        if (found) {
+            if (hoverTarget !== found) {
+                hoverTarget = found;
+                hoverStartTime = Date.now();
+            }
+            const p = Math.min((Date.now() - hoverStartTime) / HOVER_TIME, 1);
+            const ring = found.querySelector('circle');
+            if (ring) ring.style.strokeDashoffset = 219.9 - (p * 219.9);
+
+            if (p >= 1) {
+                if (found.dataset.mode) setMode(found.dataset.mode);
+                else if (found.dataset.val) setSub(currentMode, found.dataset.val, found);
+                resetHover();
+            }
+        } else resetHover();
+    }
+
+    function resetHover() {
+        document.querySelectorAll('.progress-ring circle').forEach(c => c.style.strokeDashoffset = 219.9);
+        hoverTarget = null;
+    }
+
+    function drawCursor(x, y, p) {
+        canvasCtx.save();
+        canvasCtx.beginPath();
+        canvasCtx.arc(x, y, p ? 6 : 12, 0, Math.PI*2);
+        canvasCtx.fillStyle = p ? 'var(--accent)' : 'rgba(255,255,255,0.4)';
+        canvasCtx.fill();
+        canvasCtx.strokeStyle = 'white';
+        canvasCtx.lineWidth = 2;
+        canvasCtx.stroke();
+        canvasCtx.restore();
+    }
+
+    function drawClearCircle(x, y, p) {
+        canvasCtx.beginPath();
+        canvasCtx.arc(x, y, 45, -Math.PI/2, -Math.PI/2 + (p * Math.PI*2));
+        canvasCtx.strokeStyle = 'var(--secondary)';
+        canvasCtx.lineWidth = 8;
+        canvasCtx.stroke();
+    }
+
+    function drawShapePreview(x, y, s) {
+        canvasCtx.save();
+        canvasCtx.globalAlpha = 0.3;
+        drawPrim(x, y, s, currentSub.Shape, 'white');
+        canvasCtx.restore();
+    }
+
+    function drawPrim(x, y, s, k, c) {
+        canvasCtx.fillStyle = c;
+        canvasCtx.beginPath();
+        if (k === 'circle') canvasCtx.arc(x, y, s/2, 0, Math.PI*2);
+        else if (k === 'square') canvasCtx.rect(x - s/2, y - s/2, s, s);
+        else if (k === 'star') {
+            for (let i=0; i<5; i++) {
+                canvasCtx.lineTo(Math.cos((18+i*72)/180*Math.PI)*s/2+x, -Math.sin((18+i*72)/180*Math.PI)*s/2+y);
+                canvasCtx.lineTo(Math.cos((54+i*72)/180*Math.PI)*s/4+x, -Math.sin((54+i*72)/180*Math.PI)*s/4+y);
+            }
+            canvasCtx.closePath();
+        }
+        canvasCtx.fill();
+    }
+
+    function renderCanvas() {
+        drawings.forEach(d => {
+            canvasCtx.globalCompositeOperation = d.composite || 'source-over';
+            if (d.type === 'line') {
+                canvasCtx.beginPath();
+                canvasCtx.strokeStyle = d.color === 'eraser' ? 'white' : d.color;
+                canvasCtx.lineWidth = d.color === 'eraser' ? 40 : 10;
+                canvasCtx.lineCap = 'round';
+                canvasCtx.lineJoin = 'round';
+                d.points.forEach((p, i) => i === 0 ? canvasCtx.moveTo(p.x, p.y) : canvasCtx.lineTo(p.x, p.y));
+                canvasCtx.stroke();
+            } else if (d.type === 'shape') {
+                drawPrim(d.x, d.y, d.size, d.kind, 'var(--secondary)');
+            }
+        });
+        canvasCtx.globalCompositeOperation = 'source-over';
+        
+        particles = particles.filter(p => p.life > 0);
+        particles.forEach(p => {
+            p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+            canvasCtx.fillStyle = `hsla(${p.c}, ${p.life})`;
+            canvasCtx.beginPath();
+            canvasCtx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+            canvasCtx.fill();
+        });
+    }
+
+    class Particle {
+        constructor(x, y, t) {
+            this.x = x; this.y = y; this.life = 1.0;
+            this.size = Math.random() * 8 + 2;
+            this.vx = (Math.random()-0.5)*10;
+            this.vy = (Math.random()-0.5)*10;
+            const colors = { gold: '45, 100%, 50%', rainbow: `${Math.random()*360}, 100%, 65%`, fire: '15, 100%, 50%' };
+            this.c = colors[t];
+        }
+    }
+
+    startBtn.onclick = initCamera;
+    document.getElementById('capture-btn').onclick = () => {
+        const a = document.createElement('a');
+        a.download = `AR_STUDIO_${Date.now()}.png`;
+        a.href = canvasElement.toDataURL();
+        a.click();
+    };
+
+    // Auto-attempt or show button
+    window.addEventListener('load', () => {
+        navigator.mediaDevices.enumerateDevices()
+            .then(devices => {
+                const hasCamera = devices.some(d => d.kind === 'videoinput');
+                if (!hasCamera) {
+                    statusMsg.innerText = "No camera detected on this device.";
+                    spinner.style.display = 'none';
+                } else {
+                    initCamera();
+                }
+            })
+            .catch(() => {
+                statusMsg.innerText = "Studio ready. Click button below to start.";
+                spinner.style.display = 'none';
+                startBtn.style.display = 'block';
+            });
+    });
+</script>
+</body>
+</html>
